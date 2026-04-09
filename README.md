@@ -5,7 +5,7 @@ This repository consists of three branches:
 1. [The master branch](https://github.com/DeadlockCode/barnes-hut).
     
     This is the code shown in the video and is my (mostly) faithful implementation of the original algorithm as described in the Barnes-Hut paper.
-2. [The improved branch](https://github.com/DeadlockCode/barnes-hut/tree/improved).
+2. [The improved brancch](https://github.com/DeadlockCode/barnes-hut/tree/improved).
     
     This modifies the original algorithm by a) storing the nodes in a cache friendly order and b) allowing multiple bodies to inhabit the same leaf node.
 3. [The parallel branch](https://github.com/DeadlockCode/barnes-hut/tree/parallel).
@@ -20,6 +20,26 @@ This repository consists of three branches:
 5. Open the folder in a terminal
 6. Run 'cargo run --release'
 7. Enjoy
+
+## Committing (GitHub-friendly)
+
+This repository includes a local commit-msg hook and a commit template for Conventional Commits.
+
+Run once after cloning:
+
+```powershell
+./scripts/setup-git-hooks.ps1
+```
+
+Commit title format:
+
+`<type>(optional-scope): <description>`
+
+Example:
+
+`feat(simulation): add adaptive timestep`
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full rules.
 
 ## Controls
 - Scroll to zoom

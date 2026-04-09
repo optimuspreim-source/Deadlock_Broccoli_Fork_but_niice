@@ -1,0 +1,31 @@
+#!/usr/bin/env sh
+
+MSG_FILE="$1"
+FIRST_LINE="$(head -n 1 "$MSG_FILE" | tr -d '\r')"
+
+# Allow merge commits and auto-generated revert commits.
+case "$FIRST_LINE" in
+  Merge\ *|Revert\ *)
+    exit 0
+    ;;
+esac
+
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?(!)?: [^ ].*$'
+
+if ! printf '%s' "$FIRST_LINE" | grep -Eq "$PATTERN"; then
+  echo "ERROR: Invalid commit message format."
+  echo ""
+  echo "Expected: <type>(optional-scope): <description>"
+  echo "Example : feat(simulation): add adaptive timestep"
+  echo ""
+  echo "Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+  exit 1
+fi
+
+if [ "${#FIRST_LINE}" -gt 72 ]; then
+  echo "ERROR: Commit title is longer than 72 characters (${#FIRST_LINE})."
+  echo "Please shorten the first line for better GitHub readability."
+  exit 1
+fi
+
+exit 0

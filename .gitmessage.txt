@@ -1,0 +1,14 @@
+# <type>(optional-scope): <short summary>
+#
+# Examples:
+# feat(renderer): add motion blur toggle
+# fix(quadtree): avoid division by zero in force calculation
+#
+# Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+#
+# Body (optional):
+# - Why this change was needed
+# - What changed
+#
+# Footer (optional):
+# Closes #123
