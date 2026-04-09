@@ -22,8 +22,8 @@ fn main() {
         .build_global()
         .unwrap();
 
-    let config = quarkstrom::Config {
-        window_mode: quarkstrom::WindowMode::Windowed(900, 900),
+    let config = moleculequest::Config {
+        window_mode: moleculequest::WindowMode::Windowed(900, 900),
     };
 
     let mut simulation = Simulation::new();
@@ -57,7 +57,7 @@ fn main() {
 	    }
     });
 
-    quarkstrom::run::<Renderer>(config);
+    moleculequest::run::<Renderer>(config);
 }
 
 fn render(simulation: &mut Simulation) {

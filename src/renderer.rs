@@ -9,7 +9,7 @@ use crate::{
     quadtree::{Node, Octree},
 };
 
-use quarkstrom::{egui, winit::event::VirtualKeyCode, winit_input_helper::WinitInputHelper};
+use moleculequest::{egui, winit::event::VirtualKeyCode, winit_input_helper::WinitInputHelper};
 
 use palette::{rgb::Rgba, Hsluv, IntoColor};
 use ultraviolet::{Vec2, Vec3};
@@ -39,6 +39,9 @@ pub static GRAVITY_FACTOR_BITS: Lazy<AtomicU32> = Lazy::new(|| AtomicU32::new(1.
 pub static ORBITAL_FACTOR_BITS: Lazy<AtomicU32> = Lazy::new(|| AtomicU32::new(1.0f32.to_bits()));
 pub static ARM_RENDER_BOOST_BITS: Lazy<AtomicU32> = Lazy::new(|| AtomicU32::new(1.0f32.to_bits()));
 pub static MILKY_ARM_BOOST_BITS: Lazy<AtomicU32> = Lazy::new(|| AtomicU32::new(1.25f32.to_bits()));
+pub static UI_CURSOR_X_BITS: Lazy<AtomicU32> = Lazy::new(|| AtomicU32::new(0.0f32.to_bits()));
+pub static UI_CURSOR_Y_BITS: Lazy<AtomicU32> = Lazy::new(|| AtomicU32::new(0.0f32.to_bits()));
+pub static UI_CURSOR_VALID: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
 
 const MAX_PRESET_BODIES: usize = 120_000;
 
@@ -67,7 +70,7 @@ pub struct Renderer {
     /// 0 = XY-plane (flat),  1 = XZ-plane,  2 = YZ-plane,  3 = Random
     disc_axis: u8,
 
-    settings_window_open: bool,
+    settings_collapsed: bool,
 
     show_bodies: bool,
     show_octree: bool,
@@ -103,7 +106,7 @@ pub struct Renderer {
     milky_way_systems: HashSet<u16>,
 }
 
-impl quarkstrom::Renderer for Renderer {
+impl moleculequest::Renderer for Renderer {
     fn new() -> Self {
         Self {
             pos: Vec2::zero(),
@@ -114,7 +117,7 @@ impl quarkstrom::Renderer for Renderer {
 
             disc_axis: 3,  // default: random inclination
 
-            settings_window_open: false,
+            settings_collapsed: false,
 
             show_bodies: true,
             show_octree: false,
@@ -152,14 +155,27 @@ impl quarkstrom::Renderer for Renderer {
 
     fn input(&mut self, input: &WinitInputHelper, width: u16, height: u16) {
         if input.key_pressed(VirtualKeyCode::E) || input.key_pressed(VirtualKeyCode::F1) {
-            self.settings_window_open = !self.settings_window_open;
-            self.overlay_text = if self.settings_window_open {
-                "UI: Offen".to_string()
+            self.settings_collapsed = !self.settings_collapsed;
+            self.overlay_text = if self.settings_collapsed {
+                "UI: Eingeklappt".to_string()
             } else {
-                "UI: Geschlossen".to_string()
+                "UI: Ausgeklappt".to_string()
             };
             self.overlay_frames = 60;
         }
+
+        let cursor_px = || -> (f32, f32) {
+            if UI_CURSOR_VALID.load(Ordering::Relaxed) {
+                (
+                    f32::from_bits(UI_CURSOR_X_BITS.load(Ordering::Relaxed)),
+                    f32::from_bits(UI_CURSOR_Y_BITS.load(Ordering::Relaxed)),
+                )
+            } else {
+                input
+                    .mouse()
+                    .unwrap_or((width as f32 * 0.5, height as f32 * 0.5))
+            }
+        };
 
         if input.key_pressed(VirtualKeyCode::Space) {
             let val = PAUSED.load(Ordering::Relaxed);
@@ -298,14 +314,12 @@ impl quarkstrom::Renderer for Renderer {
             }
         }
 
-        if let Some((mx, my)) = input.mouse() {
-            let steps = 5.0;
-            let zoom = (-input.scroll_diff() / steps).exp2();
-            let target =
-                Vec2::new(mx * 2.0 - width as f32, height as f32 - my * 2.0) / height as f32;
-            self.pos += target * self.scale * (1.0 - zoom);
-            self.scale *= zoom;
-        }
+        let (mx, my) = cursor_px();
+        let steps = 5.0;
+        let zoom = (-input.scroll_diff() / steps).exp2();
+        let target = Vec2::new(mx * 2.0 - width as f32, height as f32 - my * 2.0) / height as f32;
+        self.pos += target * self.scale * (1.0 - zoom);
+        self.scale *= zoom;
 
         // Middle mouse:
         //   - while a galaxy key is held → tilt the disc (yaw = left/right, pitch = up/down)
@@ -343,7 +357,7 @@ impl quarkstrom::Renderer for Renderer {
 
         // --- world-space helpers ---
         let world_mouse = || -> Vec2 {
-            let (mx, my) = input.mouse().unwrap_or_default();
+            let (mx, my) = cursor_px();
             let mut mouse = Vec2::new(mx, my);
             mouse *= 2.0 / height as f32;
             mouse.y -= 1.0;
@@ -514,7 +528,7 @@ impl quarkstrom::Renderer for Renderer {
         }
     }
 
-    fn render(&mut self, ctx: &mut quarkstrom::RenderContext) {
+    fn render(&mut self, ctx: &mut moleculequest::RenderContext) {
         {
             let mut lock = UPDATE_LOCK.lock();
             if *lock {
@@ -697,7 +711,17 @@ impl quarkstrom::Renderer for Renderer {
         }
     }
 
-    fn gui(&mut self, ctx: &quarkstrom::egui::Context) {
+    fn gui(&mut self, ctx: &moleculequest::egui::Context) {
+        let pixels_per_point = ctx.pixels_per_point();
+        if let Some(pointer_pos) = ctx.input(|i| i.pointer.hover_pos()) {
+            // Convert egui logical points to physical pixels to match input width/height.
+            UI_CURSOR_X_BITS.store((pointer_pos.x * pixels_per_point).to_bits(), Ordering::Relaxed);
+            UI_CURSOR_Y_BITS.store((pointer_pos.y * pixels_per_point).to_bits(), Ordering::Relaxed);
+            UI_CURSOR_VALID.store(true, Ordering::Relaxed);
+        } else {
+            UI_CURSOR_VALID.store(false, Ordering::Relaxed);
+        }
+
         // FPS + particle count
         {
             let body_count = BODIES.lock().len();
@@ -754,27 +778,30 @@ impl quarkstrom::Renderer for Renderer {
             self.overlay_frames -= 1;
         }
 
-        // Persistent quick toggle button for the right-side controls.
-        egui::Area::new("ui_toggle_button")
-            .anchor(egui::Align2::RIGHT_TOP, [-6.0, 6.0])
-            .order(egui::Order::Foreground)
+        let max_h = (ctx.screen_rect().height() - 24.0).max(200.0);
+        let panel_width = if self.settings_collapsed { 160.0 } else { 310.0 };
+        egui::SidePanel::right("runtime_controls_dock")
+            .resizable(false)
+            .min_width(panel_width)
+            .max_width(panel_width)
             .show(ctx, |ui| {
-                let label = if self.settings_window_open { "✕" } else { "⚙" };
-                if ui.button(label).clicked() {
-                    self.settings_window_open = !self.settings_window_open;
-                }
-            });
+                ui.horizontal(|ui| {
+                    ui.heading("Runtime Controls");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let label = if self.settings_collapsed { "[+]" } else { "[-]" };
+                        if ui.button(label).clicked() {
+                            self.settings_collapsed = !self.settings_collapsed;
+                        }
+                    });
+                });
 
-        if self.settings_window_open {
-            let max_h = (ctx.screen_rect().height() - 24.0).max(200.0);
-            egui::Window::new("Runtime Controls")
-                .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
-                .fixed_size([380.0, max_h])
-                .resizable(false)
-                .collapsible(true)
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.separator();
+                if self.settings_collapsed {
+                    ui.label("E/F1 oder [+] zum Ausklappen");
+                    return;
+                }
+
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(max_h - 56.0).show(ui, |ui| {
 
                         egui::CollapsingHeader::new("Global Physik")
                             .default_open(true)
@@ -787,12 +814,12 @@ impl quarkstrom::Renderer for Renderer {
                                 let mut orbit_factor = f32::from_bits(ORBITAL_FACTOR_BITS.load(Ordering::Relaxed));
 
                                 ui.label("Alle Slider erlauben positive und negative Werte.");
-                                ui.add(egui::Slider::new(&mut base_dt, -0.30..=0.30).text("Basis dt"));
-                                ui.add(egui::Slider::new(&mut dt_factor, -64.0..=64.0).text("dt Faktor"));
-                                ui.add(egui::Slider::new(&mut base_g, -64.0..=64.0).text("Basis G"));
-                                ui.add(egui::Slider::new(&mut g_factor, -64.0..=64.0).text("G Faktor"));
-                                ui.add(egui::Slider::new(&mut base_soft, -120.0..=120.0).text("Basis Softening"));
-                                ui.add(egui::Slider::new(&mut orbit_factor, -16.0..=16.0).text("Orbit Faktor"));
+                                ui.add(egui::Slider::new(&mut base_dt, -0.30..=0.30).text("dt"));
+                                ui.add(egui::Slider::new(&mut dt_factor, -64.0..=64.0).text("dt×"));
+                                ui.add(egui::Slider::new(&mut base_g, -64.0..=64.0).text("G"));
+                                ui.add(egui::Slider::new(&mut g_factor, -64.0..=64.0).text("G×"));
+                                ui.add(egui::Slider::new(&mut base_soft, -120.0..=120.0).text("Soft"));
+                                ui.add(egui::Slider::new(&mut orbit_factor, -16.0..=16.0).text("Orbit"));
 
                                 BASE_DT_BITS.store(base_dt.to_bits(), Ordering::Relaxed);
                                 DT_FACTOR_BITS.store(dt_factor.to_bits(), Ordering::Relaxed);
@@ -816,8 +843,8 @@ impl quarkstrom::Renderer for Renderer {
                             .show(ui, |ui| {
                                 let mut shield = crate::quadtree::SHIELD_AGE_CTRL.load(Ordering::Relaxed) as f32;
                                 let mut blend = crate::quadtree::BLEND_AGE_CTRL.load(Ordering::Relaxed) as f32;
-                                ui.add(egui::Slider::new(&mut shield, -128.0..=255.0).text("Shield Age"));
-                                ui.add(egui::Slider::new(&mut blend, -128.0..=255.0).text("Blend Age"));
+                                ui.add(egui::Slider::new(&mut shield, -128.0..=255.0).text("Shield"));
+                                ui.add(egui::Slider::new(&mut blend, -128.0..=255.0).text("Blend"));
                                 crate::quadtree::SHIELD_AGE_CTRL.store(shield as i32, Ordering::Relaxed);
                                 crate::quadtree::BLEND_AGE_CTRL.store(blend as i32, Ordering::Relaxed);
                             });
@@ -830,8 +857,8 @@ impl quarkstrom::Renderer for Renderer {
 
                                 let mut arm_boost = f32::from_bits(ARM_RENDER_BOOST_BITS.load(Ordering::Relaxed));
                                 let mut mw_boost = f32::from_bits(MILKY_ARM_BOOST_BITS.load(Ordering::Relaxed));
-                                ui.add(egui::Slider::new(&mut arm_boost, -2.0..=4.0).text("Arm Render Boost"));
-                                ui.add(egui::Slider::new(&mut mw_boost, -2.0..=4.0).text("Milky Arm Boost"));
+                                ui.add(egui::Slider::new(&mut arm_boost, -2.0..=4.0).text("Arm"));
+                                ui.add(egui::Slider::new(&mut mw_boost, -2.0..=4.0).text("MW"));
                                 ARM_RENDER_BOOST_BITS.store(arm_boost.to_bits(), Ordering::Relaxed);
                                 MILKY_ARM_BOOST_BITS.store(mw_boost.to_bits(), Ordering::Relaxed);
                             });
@@ -864,8 +891,8 @@ impl quarkstrom::Renderer for Renderer {
                                 ui.checkbox(&mut self.show_octree, "Show Octree");
                                 if self.show_octree {
                                     let range = &mut self.depth_range;
-                                    ui.add(egui::Slider::new(&mut range.0, 0..=64).text("Depth Min"));
-                                    ui.add(egui::Slider::new(&mut range.1, 0..=64).text("Depth Max"));
+                                    ui.add(egui::Slider::new(&mut range.0, 0..=64).text("Min"));
+                                    ui.add(egui::Slider::new(&mut range.1, 0..=64).text("Max"));
                                 }
                                 ui.separator();
                                 ui.label("Scheiben-Ebene (I)");
@@ -877,9 +904,8 @@ impl quarkstrom::Renderer for Renderer {
                                     }
                                 });
                             });
-                    });
                 });
-        }
+            });
     }
 }
 
