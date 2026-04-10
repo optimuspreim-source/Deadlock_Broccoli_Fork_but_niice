@@ -8,11 +8,23 @@ mod simulation;
 mod galaxy_templates;
 mod utils;
 mod utils_hierarchical;
+mod observer;
 
 use renderer::Renderer;
 use simulation::Simulation;
 
+fn configure_wgpu_backend_fallback() {
+    // quarkstrom currently requests conservative rasterization explicitly.
+    // On some Windows adapters/backends this device request fails unless
+    // we allow backend fallback (e.g., DX11/GL).
+    if std::env::var("WGPU_BACKEND").is_err() {
+        std::env::set_var("WGPU_BACKEND", "dx12,dx11,gl");
+    }
+}
+
 fn main() {
+    configure_wgpu_backend_fallback();
+
     // Keep one core for UI/render thread and use the rest for Rayon tasks.
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).max(1))

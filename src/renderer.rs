@@ -98,10 +98,14 @@ pub struct Renderer {
 
     overlay_text: String,
     overlay_frames: u32,
+    observer_auto_stream: bool,
 
     center_targets: Vec<CenterTarget>,
     center_target_idx: usize,
     center_lock: bool,
+
+    last_frame_width: u16,
+    last_frame_height: u16,
 
     milky_way_systems: HashSet<u16>,
 }
@@ -144,16 +148,30 @@ impl moleculequest::Renderer for Renderer {
 
             overlay_text: String::new(),
             overlay_frames: 0,
+            observer_auto_stream: crate::observer::ui_auto_stream_enabled(),
 
             center_targets: Vec::new(),
             center_target_idx: 0,
             center_lock: false,
+
+            last_frame_width: 900,
+            last_frame_height: 900,
 
             milky_way_systems: HashSet::new(),
         }
     }
 
     fn input(&mut self, input: &WinitInputHelper, width: u16, height: u16) {
+        self.last_frame_width = width;
+        self.last_frame_height = height;
+
+        // Winit reports 0x0 when minimized. Skip frame input math to avoid
+        // divisions by zero and downstream invalid viewport state.
+        if width == 0 || height == 0 {
+            UI_CURSOR_VALID.store(false, Ordering::Relaxed);
+            return;
+        }
+
         if input.key_pressed(VirtualKeyCode::E) || input.key_pressed(VirtualKeyCode::F1) {
             self.settings_collapsed = !self.settings_collapsed;
             self.overlay_text = if self.settings_collapsed {
@@ -529,6 +547,10 @@ impl moleculequest::Renderer for Renderer {
     }
 
     fn render(&mut self, ctx: &mut moleculequest::RenderContext) {
+        if self.last_frame_width == 0 || self.last_frame_height == 0 {
+            return;
+        }
+
         {
             let mut lock = UPDATE_LOCK.lock();
             if *lock {
@@ -712,6 +734,11 @@ impl moleculequest::Renderer for Renderer {
     }
 
     fn gui(&mut self, ctx: &moleculequest::egui::Context) {
+        if self.last_frame_width == 0 || self.last_frame_height == 0 {
+            UI_CURSOR_VALID.store(false, Ordering::Relaxed);
+            return;
+        }
+
         let pixels_per_point = ctx.pixels_per_point();
         if let Some(pointer_pos) = ctx.input(|i| i.pointer.hover_pos()) {
             // Convert egui logical points to physical pixels to match input width/height.
@@ -861,6 +888,25 @@ impl moleculequest::Renderer for Renderer {
                                 ui.add(egui::Slider::new(&mut mw_boost, -2.0..=4.0).text("MW"));
                                 ARM_RENDER_BOOST_BITS.store(arm_boost.to_bits(), Ordering::Relaxed);
                                 MILKY_ARM_BOOST_BITS.store(mw_boost.to_bits(), Ordering::Relaxed);
+
+                                ui.separator();
+                                let changed = ui
+                                    .checkbox(
+                                        &mut self.observer_auto_stream,
+                                        "Observer Auto-CSV: 10 Snapshots / 20s-Takt",
+                                    )
+                                    .changed();
+                                if changed {
+                                    crate::observer::set_ui_auto_stream_enabled(self.observer_auto_stream);
+                                    self.overlay_text = if self.observer_auto_stream {
+                                        "Observer: Auto-CSV EIN".to_string()
+                                    } else {
+                                        "Observer: Auto-CSV AUS".to_string()
+                                    };
+                                    self.overlay_frames = 90;
+                                }
+                                ui.label("Dateien: observer_inbox/cycle_<id>_snapshot_01..10.csv");
+                                ui.label("Verifiziert/stale CSV werden automatisch entfernt.");
                             });
 
                         egui::CollapsingHeader::new("Kamera & Center Lock")

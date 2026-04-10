@@ -38,6 +38,14 @@ pub fn create_galaxy_template(galaxy: GalaxyType, center: Vec3, system_id: u16, 
     }
 
     normalize_template_system(&mut bodies, center, &spec);
+    let smbh_exclusion = (world(spec.bulge_radius_ly) * spec.disc_population.spatial_scale * 0.04).max(4.0);
+    apply_flat_rotation_with_epicycles(
+        &mut bodies,
+        center,
+        spec.spin,
+        smbh_exclusion,
+        &spec.disc_population,
+    );
     apply_minimal_physical_radii(&mut bodies);
     bodies
 }
@@ -208,7 +216,29 @@ struct GalaxySpec {
     arm_contrast: f32,
     arm_coherence: f32,
     dispersion_scale: f32,
+    disc_population: DiscPopulationProfile,
     companion: Option<CompanionSpec>,
+}
+
+#[derive(Clone, Copy)]
+struct DiscPopulationProfile {
+    spatial_scale: f32,
+    outer_count_bias: f32,
+    inner_mass_scale: f32,
+    outer_mass_scale: f32,
+    inner_radius_scale: f32,
+    outer_radius_scale: f32,
+    mass_falloff_exp: f32,
+    radius_falloff_exp: f32,
+    disc_mass_multiplier: f32,
+    arm_contrast_gain: f32,
+    arm_lock_gain: f32,
+    arm_noise_scale: f32,
+    inner_orbit_boost: f32,
+    outer_orbit_boost: f32,
+    outer_osc_start_frac: f32,
+    outer_osc_boost_max: f32,
+    outer_osc_amp_cap: f32,
 }
 
 impl GalaxySpec {
@@ -239,7 +269,7 @@ enum GalaxyMorphology {
 }
 
 const LY_TO_WORLD: f32 = 0.03;
-const TEMPLATE_POPULATION_SCALE: usize = 3;
+const TEMPLATE_POPULATION_SCALE: usize = 6;
 const MIN_PHYSICAL_RADIUS: f32 = 0.01;
 const TARGET_PHYSICAL_RADIUS: f32 = MIN_PHYSICAL_RADIUS * 4.0;
 
@@ -247,6 +277,11 @@ const STAR_RADIUS: f32 = TARGET_PHYSICAL_RADIUS;
 const CORE_RADIUS: f32 = TARGET_PHYSICAL_RADIUS;
 const CORE_ORBITER_RADIUS: f32 = TARGET_PHYSICAL_RADIUS;
 const CORE_RADIUS_CAP: f32 = TARGET_PHYSICAL_RADIUS;
+const FLAT_ROTATION_SPEED_UNITS: f32 = 240.0;
+const FLAT_ROTATION_SPEED_SCALE: f32 = 0.01;
+const EPICYCLE_AMPLITUDE_MIN: f32 = 0.05;
+const EPICYCLE_AMPLITUDE_MAX: f32 = 0.10;
+const EPICYCLE_FREQUENCY_FACTOR: f32 = 2.0;
 
 const fn scaled_count(count: usize) -> usize {
     count * TEMPLATE_POPULATION_SCALE
@@ -305,14 +340,33 @@ fn galaxy_spec(galaxy: GalaxyType) -> GalaxySpec {
             flattening: 0.92,
             disc_bias: 1.85,
             spin: 1.0,
-            core_mass: 40.0,
-            bulge_mass: 380.0,
+            core_mass: 4.0,
+            bulge_mass: 416.0,
             disc_mass: 1_120.0,
             halo_mass: 240.0,
             rotation_support: 1.05,
             arm_contrast: 0.98,
             arm_coherence: 0.96,
             dispersion_scale: 0.42,
+            disc_population: DiscPopulationProfile {
+                spatial_scale: 0.80,
+                outer_count_bias: 1.22,
+                inner_mass_scale: 4.8,
+                outer_mass_scale: 0.24,
+                inner_radius_scale: 1.34,
+                outer_radius_scale: 0.58,
+                mass_falloff_exp: 1.62,
+                radius_falloff_exp: 1.34,
+                disc_mass_multiplier: 1.24,
+                arm_contrast_gain: 1.30,
+                arm_lock_gain: 1.38,
+                arm_noise_scale: 0.45,
+                inner_orbit_boost: 1.46,
+                outer_orbit_boost: 1.02,
+                outer_osc_start_frac: 0.34,
+                outer_osc_boost_max: 1.90,
+                outer_osc_amp_cap: 0.23,
+            },
             companion: None,
         },
         GalaxyType::Triangulum => GalaxySpec {
@@ -336,14 +390,33 @@ fn galaxy_spec(galaxy: GalaxyType) -> GalaxySpec {
             flattening: 0.95,
             disc_bias: 1.65,
             spin: 1.0,
-            core_mass: 18.0,
-            bulge_mass: 90.0,
+            core_mass: 3.0,
+            bulge_mass: 105.0,
             disc_mass: 760.0,
             halo_mass: 130.0,
             rotation_support: 0.98,
             arm_contrast: 0.78,
             arm_coherence: 0.84,
             dispersion_scale: 0.56,
+            disc_population: DiscPopulationProfile {
+                spatial_scale: 0.82,
+                outer_count_bias: 1.35,
+                inner_mass_scale: 3.5,
+                outer_mass_scale: 0.22,
+                inner_radius_scale: 1.22,
+                outer_radius_scale: 0.56,
+                mass_falloff_exp: 1.34,
+                radius_falloff_exp: 1.18,
+                disc_mass_multiplier: 1.14,
+                arm_contrast_gain: 1.22,
+                arm_lock_gain: 1.30,
+                arm_noise_scale: 0.52,
+                inner_orbit_boost: 1.38,
+                outer_orbit_boost: 1.12,
+                outer_osc_start_frac: 0.30,
+                outer_osc_boost_max: 2.20,
+                outer_osc_amp_cap: 0.28,
+            },
             companion: None,
         },
         GalaxyType::SmallMagellanicCloud => GalaxySpec {
@@ -367,14 +440,33 @@ fn galaxy_spec(galaxy: GalaxyType) -> GalaxySpec {
             flattening: 0.8,
             disc_bias: 1.2,
             spin: 0.8,
-            core_mass: 12.0,
-            bulge_mass: 70.0,
+            core_mass: 1.2,
+            bulge_mass: 80.8,
             disc_mass: 320.0,
             halo_mass: 80.0,
             rotation_support: 0.66,
             arm_contrast: 0.18,
             arm_coherence: 0.28,
             dispersion_scale: 1.18,
+            disc_population: DiscPopulationProfile {
+                spatial_scale: 0.86,
+                outer_count_bias: 1.18,
+                inner_mass_scale: 2.2,
+                outer_mass_scale: 0.42,
+                inner_radius_scale: 1.08,
+                outer_radius_scale: 0.72,
+                mass_falloff_exp: 1.08,
+                radius_falloff_exp: 0.94,
+                disc_mass_multiplier: 1.10,
+                arm_contrast_gain: 0.72,
+                arm_lock_gain: 0.65,
+                arm_noise_scale: 0.95,
+                inner_orbit_boost: 1.20,
+                outer_orbit_boost: 1.18,
+                outer_osc_start_frac: 0.28,
+                outer_osc_boost_max: 2.35,
+                outer_osc_amp_cap: 0.30,
+            },
             companion: None,
         },
         GalaxyType::Whirlpool => GalaxySpec {
@@ -398,14 +490,33 @@ fn galaxy_spec(galaxy: GalaxyType) -> GalaxySpec {
             flattening: 0.96,
             disc_bias: 1.7,
             spin: 1.0,
-            core_mass: 26.0,
-            bulge_mass: 180.0,
+            core_mass: 3.0,
+            bulge_mass: 203.0,
             disc_mass: 840.0,
             halo_mass: 160.0,
             rotation_support: 1.08,
             arm_contrast: 0.99,
             arm_coherence: 0.97,
             dispersion_scale: 0.40,
+            disc_population: DiscPopulationProfile {
+                spatial_scale: 0.79,
+                outer_count_bias: 1.26,
+                inner_mass_scale: 5.1,
+                outer_mass_scale: 0.22,
+                inner_radius_scale: 1.36,
+                outer_radius_scale: 0.56,
+                mass_falloff_exp: 1.70,
+                radius_falloff_exp: 1.46,
+                disc_mass_multiplier: 1.28,
+                arm_contrast_gain: 1.35,
+                arm_lock_gain: 1.46,
+                arm_noise_scale: 0.40,
+                inner_orbit_boost: 1.52,
+                outer_orbit_boost: 1.11,
+                outer_osc_start_frac: 0.33,
+                outer_osc_boost_max: 2.10,
+                outer_osc_amp_cap: 0.27,
+            },
             companion: Some(CompanionSpec {
                 offset_ly: 31_000.0,
                 radius_ly: 8_500.0,
@@ -437,14 +548,33 @@ fn galaxy_spec(galaxy: GalaxyType) -> GalaxySpec {
             flattening: 0.46,
             disc_bias: 2.0,
             spin: 1.0,
-            core_mass: 28.0,
-            bulge_mass: 560.0,
+            core_mass: 3.0,
+            bulge_mass: 585.0,
             disc_mass: 500.0,
             halo_mass: 100.0,
             rotation_support: 0.90,
             arm_contrast: 0.03,
             arm_coherence: 0.16,
             dispersion_scale: 0.62,
+            disc_population: DiscPopulationProfile {
+                spatial_scale: 0.76,
+                outer_count_bias: 1.10,
+                inner_mass_scale: 6.2,
+                outer_mass_scale: 0.28,
+                inner_radius_scale: 1.58,
+                outer_radius_scale: 0.60,
+                mass_falloff_exp: 1.92,
+                radius_falloff_exp: 1.62,
+                disc_mass_multiplier: 1.38,
+                arm_contrast_gain: 0.55,
+                arm_lock_gain: 0.58,
+                arm_noise_scale: 1.00,
+                inner_orbit_boost: 1.58,
+                outer_orbit_boost: 1.06,
+                outer_osc_start_frac: 0.36,
+                outer_osc_boost_max: 1.85,
+                outer_osc_amp_cap: 0.24,
+            },
             companion: None,
         },
         GalaxyType::ESO383_76 => GalaxySpec {
@@ -468,14 +598,33 @@ fn galaxy_spec(galaxy: GalaxyType) -> GalaxySpec {
             flattening: 0.72,
             disc_bias: 1.4,
             spin: 0.35,
-            core_mass: 34.0,
-            bulge_mass: 760.0,
+            core_mass: 3.0,
+            bulge_mass: 791.0,
             disc_mass: 180.0,
             halo_mass: 190.0,
             rotation_support: 0.40,
             arm_contrast: 0.0,
             arm_coherence: 0.0,
             dispersion_scale: 1.34,
+            disc_population: DiscPopulationProfile {
+                spatial_scale: 0.84,
+                outer_count_bias: 1.14,
+                inner_mass_scale: 3.9,
+                outer_mass_scale: 0.34,
+                inner_radius_scale: 1.30,
+                outer_radius_scale: 0.70,
+                mass_falloff_exp: 1.38,
+                radius_falloff_exp: 1.20,
+                disc_mass_multiplier: 1.20,
+                arm_contrast_gain: 0.58,
+                arm_lock_gain: 0.62,
+                arm_noise_scale: 0.96,
+                inner_orbit_boost: 1.28,
+                outer_orbit_boost: 1.08,
+                outer_osc_start_frac: 0.35,
+                outer_osc_boost_max: 1.78,
+                outer_osc_amp_cap: 0.22,
+            },
             companion: None,
         },
         GalaxyType::IC1101 => GalaxySpec {
@@ -499,14 +648,33 @@ fn galaxy_spec(galaxy: GalaxyType) -> GalaxySpec {
             flattening: 0.82,
             disc_bias: 1.25,
             spin: 0.22,
-            core_mass: 52.0,
-            bulge_mass: 1_320.0,
+            core_mass: 6.0,
+            bulge_mass: 1_366.0,
             disc_mass: 680.0,
             halo_mass: 320.0,
             rotation_support: 0.32,
             arm_contrast: 0.0,
             arm_coherence: 0.0,
             dispersion_scale: 1.48,
+            disc_population: DiscPopulationProfile {
+                spatial_scale: 0.74,
+                outer_count_bias: 1.08,
+                inner_mass_scale: 7.4,
+                outer_mass_scale: 0.32,
+                inner_radius_scale: 1.74,
+                outer_radius_scale: 0.72,
+                mass_falloff_exp: 2.05,
+                radius_falloff_exp: 1.78,
+                disc_mass_multiplier: 1.46,
+                arm_contrast_gain: 0.46,
+                arm_lock_gain: 0.48,
+                arm_noise_scale: 1.04,
+                inner_orbit_boost: 1.72,
+                outer_orbit_boost: 1.04,
+                outer_osc_start_frac: 0.38,
+                outer_osc_boost_max: 1.70,
+                outer_osc_amp_cap: 0.20,
+            },
             companion: None,
         },
     }
@@ -603,7 +771,7 @@ fn add_core(
     let mut core = Body::new_with_system(center, Vec3::zero(), spec.core_mass, CORE_RADIUS, system_id);
     core.arm_strength = 0.0;
     bodies.push(core);
-    let core_orbit_radius = world(spec.bulge_radius_ly) * 0.08;
+    let core_orbit_radius = world(spec.bulge_radius_ly) * spec.disc_population.spatial_scale * 0.08;
     let orbiters = spec.core_bodies.saturating_sub(1).max(1);
     for index in 0..orbiters {
         let phase = index as f32 * std::f32::consts::TAU / orbiters as f32;
@@ -636,8 +804,8 @@ fn add_bulge(
     spec: &GalaxySpec,
     rng: &mut fastrand::Rng,
 ) {
-    let bulge_radius = world(spec.bulge_radius_ly);
-    let bulge_height = world(spec.bulge_height_ly);
+    let bulge_radius = world(spec.bulge_radius_ly) * spec.disc_population.spatial_scale;
+    let bulge_height = world(spec.bulge_height_ly) * spec.disc_population.spatial_scale;
     let mass_per_body = spec.bulge_mass / spec.bulge_bodies.max(1) as f32;
 
     for _ in 0..spec.bulge_bodies {
@@ -675,15 +843,23 @@ fn add_disc(
     spec: &GalaxySpec,
     rng: &mut fastrand::Rng,
 ) {
-    let visible_radius = world(spec.visible_radius_ly);
-    let disc_height = world(spec.disc_height_ly);
-    let bar_length = world(spec.bar_length_ly);
+    let visible_radius = world(spec.visible_radius_ly) * spec.disc_population.spatial_scale;
+    let disc_height = world(spec.disc_height_ly) * spec.disc_population.spatial_scale;
+    let bar_length = world(spec.bar_length_ly) * spec.disc_population.spatial_scale;
     let mass_per_body = spec.disc_mass / spec.disc_bodies.max(1) as f32;
+    let target_disc_mass = spec.disc_mass * spec.disc_population.disc_mass_multiplier;
+    let disc_start = bodies.len();
+    let mut built_disc_mass = 0.0f32;
 
     for _ in 0..spec.disc_bodies {
         let base_angle = rng.f32() * std::f32::consts::TAU;
         let mut angle = base_angle;
-        let radius = visible_radius * rng.f32().powf(spec.disc_bias);
+        let radial_u = rng.f32();
+        let outer_bias = spec.disc_population.outer_count_bias.max(0.2);
+        let legacy_bias = (1.0 / spec.disc_bias.max(0.25)).clamp(0.35, 2.4);
+        let radial_frac = (1.0 - (1.0 - radial_u).powf(outer_bias)).powf(legacy_bias);
+        let radius = (visible_radius * radial_frac).max(1.0);
+        let radial_norm = (radius / visible_radius.max(1.0)).clamp(0.0, 1.0);
         let arm_index = if spec.arm_count > 0 { rng.u32(0..spec.arm_count as u32) as f32 } else { 0.0 };
         let in_bar = spec.bar_fraction > 0.0 && radius < bar_length && rng.f32() < spec.bar_fraction;
         let mut arm_membership = 0.0f32;
@@ -700,17 +876,35 @@ fn add_disc(
                 let delta = shortest_angle_delta(base_angle, ridge_angle);
                 let width = spec.arm_width.max(0.05);
                 let gaussian = (-(delta / width).powi(2)).exp();
-                arm_membership = (spec.arm_contrast * gaussian.powf(0.75 + 0.5 * spec.arm_coherence)).clamp(0.0, 1.0);
-                let arm_noise = noisy(rng) * width * (1.0 - arm_membership * 0.65);
-                angle = base_angle + delta * arm_membership * (0.72 + 0.18 * spec.arm_coherence) + arm_noise;
+                let contrast_gain = spec.disc_population.arm_contrast_gain.max(0.2);
+                arm_membership = (
+                    spec.arm_contrast
+                        * contrast_gain
+                        * gaussian.powf((0.68 + 0.5 * spec.arm_coherence) / contrast_gain.sqrt())
+                )
+                .clamp(0.0, 1.0);
+                let arm_lock = spec.disc_population.arm_lock_gain.max(0.2);
+                let arm_noise = noisy(rng)
+                    * width
+                    * (1.0 - arm_membership * (0.55 + 0.30 * arm_lock).min(0.94))
+                    * spec.disc_population.arm_noise_scale.max(0.15);
+                angle = base_angle
+                    + delta * arm_membership * (0.72 + 0.18 * spec.arm_coherence) * arm_lock
+                    + arm_noise;
             }
             let irregular = visible_radius * spec.irregularity;
             let arm_radial_bias = 1.0 - 0.035 * arm_membership;
             let biased_radius = radius * arm_radial_bias;
-            let x = angle.cos() * biased_radius + noisy(rng) * irregular * (1.0 - 0.4 * arm_membership);
-            let y = angle.sin() * biased_radius + noisy(rng) * irregular * (1.0 - 0.4 * arm_membership);
+            let arm_lock = spec.disc_population.arm_lock_gain.max(0.2);
+            let arm_mix = (arm_membership * arm_lock).clamp(0.0, 0.98);
+            let x = angle.cos() * biased_radius + noisy(rng) * irregular * (1.0 - 0.55 * arm_mix);
+            let y = angle.sin() * biased_radius + noisy(rng) * irregular * (1.0 - 0.55 * arm_mix);
             let warp = spec.warp * radius * (angle * 1.5).sin();
-            let z = noisy(rng) * disc_height * (0.25 + 0.75 * radius / visible_radius) * (1.0 - 0.35 * arm_membership) + warp;
+            let z = noisy(rng)
+                * disc_height
+                * (0.25 + 0.75 * radius / visible_radius)
+                * (1.0 - 0.42 * arm_mix)
+                + warp;
             Vec3::new(x, y, z)
         };
 
@@ -725,15 +919,31 @@ fn add_disc(
             * tangential_speed
             * (0.028 + spec.irregularity * 0.08)
             * disc_dispersion(spec, arm_membership);
+        let mass_t = radial_norm.powf(spec.disc_population.mass_falloff_exp.max(0.1));
+        let radius_t = radial_norm.powf(spec.disc_population.radius_falloff_exp.max(0.1));
+        let body_mass_factor = spec.disc_population.inner_mass_scale
+            + (spec.disc_population.outer_mass_scale - spec.disc_population.inner_mass_scale) * mass_t;
+        let body_radius_factor = spec.disc_population.inner_radius_scale
+            + (spec.disc_population.outer_radius_scale - spec.disc_population.inner_radius_scale) * radius_t;
+        let body_mass = mass_per_body * body_mass_factor.max(0.05);
         let mut body = Body::new_with_system(
             center + offset,
             tangent * tangential_speed + radial_stream + velocity_noise,
-            mass_per_body,
-            STAR_RADIUS,
+            body_mass,
+            STAR_RADIUS * body_radius_factor.max(0.25),
             system_id,
         );
-        body.arm_strength = arm_membership;
+        let arm_boost = spec.disc_population.arm_contrast_gain.max(0.2).sqrt();
+        body.arm_strength = (arm_membership * arm_boost).clamp(0.0, 1.0);
+        built_disc_mass += body.mass;
         bodies.push(body);
+    }
+
+    if built_disc_mass > 0.0 {
+        let mass_fix = target_disc_mass / built_disc_mass;
+        for body in bodies[disc_start..].iter_mut() {
+            body.mass *= mass_fix;
+        }
     }
 }
 
@@ -745,8 +955,8 @@ fn add_outer_binaries(
     spec: &GalaxySpec,
     rng: &mut fastrand::Rng,
 ) {
-    let visible_radius = world(spec.visible_radius_ly);
-    let halo_radius = world(spec.halo_radius_ly);
+    let visible_radius = world(spec.visible_radius_ly) * spec.disc_population.spatial_scale;
+    let halo_radius = world(spec.halo_radius_ly) * spec.disc_population.spatial_scale;
     let pair_mass = (spec.halo_mass / spec.binary_pairs.max(1) as f32).max(0.8);
 
     for _ in 0..spec.binary_pairs {
@@ -788,8 +998,8 @@ fn add_companion(
     companion: CompanionSpec,
     rng: &mut fastrand::Rng,
 ) {
-    let offset = world(companion.offset_ly);
-    let radius = world(companion.radius_ly);
+    let offset = world(companion.offset_ly) * host.disc_population.spatial_scale;
+    let radius = world(companion.radius_ly) * host.disc_population.spatial_scale;
     let angle = companion.orbit_phase;
     let companion_center = center + Vec3::new(angle.cos() * offset, angle.sin() * offset, offset * companion.orbit_tilt);
     let host_offset = companion_center - center;
@@ -952,8 +1162,91 @@ fn stabilize_center_region(bodies: &mut [Body], center: Vec3, spec: &GalaxySpec)
     }
 }
 
+fn apply_flat_rotation_with_epicycles(
+    bodies: &mut [Body],
+    center: Vec3,
+    spin: f32,
+    exclusion_radius: f32,
+    profile: &DiscPopulationProfile,
+) {
+    if bodies.is_empty() {
+        return;
+    }
+
+    // 220 in galactic units mapped into stable world-space speeds.
+    let v_flat = (FLAT_ROTATION_SPEED_UNITS * FLAT_ROTATION_SPEED_SCALE).max(1e-4);
+    let spin_sign = if spin >= 0.0 { 1.0 } else { -1.0 };
+    let exclusion_sq = exclusion_radius * exclusion_radius;
+    let mut max_disc_r = exclusion_radius.max(1e-4);
+    for body in bodies.iter() {
+        let rel = body.pos - center;
+        let r = (rel.x * rel.x + rel.y * rel.y).sqrt();
+        if r > max_disc_r {
+            max_disc_r = r;
+        }
+    }
+    let outer_start = max_disc_r * profile.outer_osc_start_frac.clamp(0.15, 0.75);
+    let outer_span = (max_disc_r - outer_start).max(1e-4);
+
+    for body in bodies.iter_mut() {
+        let rel = body.pos - center;
+        let r_sq = rel.x * rel.x + rel.y * rel.y;
+        if r_sq <= exclusion_sq {
+            continue;
+        }
+
+        let r = r_sq.sqrt().max(1e-4);
+        let radial_dir = Vec3::new(rel.x / r, rel.y / r, 0.0);
+        let tangent_dir = Vec3::new(-radial_dir.y, radial_dir.x, 0.0) * spin_sign;
+        let radial_norm = (r / max_disc_r.max(1e-4)).clamp(0.0, 1.0);
+        let inner_boost = 1.0
+            + (profile.inner_orbit_boost.max(1.0) - 1.0) * (1.0 - radial_norm).powf(1.5);
+        let outer_boost = 1.0
+            + (profile.outer_orbit_boost.max(1.0) - 1.0) * radial_norm.powf(1.1);
+        let tangential_speed = v_flat * inner_boost * outer_boost;
+
+        // Differential rotation with flat velocity curve: omega = v / r.
+        let omega = tangential_speed / r;
+        let phase = (rel.x * 0.0037
+            + rel.y * 0.0059
+            + body.mass * 0.13
+            + body.system_id as f32 * 0.071)
+            .rem_euclid(std::f32::consts::TAU);
+        let amp_mix = (phase * 1.73).sin() * 0.5 + 0.5;
+        let base_amp_frac = EPICYCLE_AMPLITUDE_MIN
+            + (EPICYCLE_AMPLITUDE_MAX - EPICYCLE_AMPLITUDE_MIN) * amp_mix;
+        // Smoothly strengthen epicycles in the outer two-thirds of the disc.
+        let outer_t = ((r - outer_start) / outer_span).clamp(0.0, 1.0);
+        let smooth_outer_t = outer_t * outer_t * (3.0 - 2.0 * outer_t);
+        let outer_boost = 1.0
+            + (profile.outer_osc_boost_max.max(1.0) - 1.0) * smooth_outer_t;
+        let amp_frac = (base_amp_frac * outer_boost)
+            .min(profile.outer_osc_amp_cap.max(EPICYCLE_AMPLITUDE_MAX));
+        let omega_epi = EPICYCLE_FREQUENCY_FACTOR * omega;
+        let radial_speed = amp_frac * r * omega_epi * phase.cos();
+
+        body.vel = tangent_dir * tangential_speed
+            + radial_dir * radial_speed
+            + Vec3::new(0.0, 0.0, body.vel.z * 0.2);
+    }
+
+    // Remove residual center-of-mass drift after remapping velocities.
+    let mut total_mass = 0.0f32;
+    let mut com_vel = Vec3::zero();
+    for body in bodies.iter() {
+        total_mass += body.mass;
+        com_vel += body.vel * body.mass;
+    }
+    if total_mass > 0.0 {
+        com_vel /= total_mass;
+        for body in bodies.iter_mut() {
+            body.vel -= com_vel;
+        }
+    }
+}
+
 fn apply_minimal_physical_radii(bodies: &mut [Body]) {
     for body in bodies.iter_mut() {
-        body.radius = TARGET_PHYSICAL_RADIUS;
+        body.radius = body.radius.max(MIN_PHYSICAL_RADIUS * 0.5);
     }
 }
