@@ -70,6 +70,11 @@ impl quarkstrom::Renderer for Renderer {
     }
 
     fn input(&mut self, input: &WinitInputHelper, width: u16, height: u16) {
+        // Guard against a zero-size viewport (e.g. during window minimisation).
+        if width == 0 || height == 0 {
+            return;
+        }
+
         self.settings_window_open ^= input.key_pressed(VirtualKeyCode::E);
 
         if input.key_pressed(VirtualKeyCode::Space) {
