@@ -6,6 +6,7 @@ mod quadtree;
 mod renderer;
 mod simulation;
 mod galaxy_templates;
+mod observer;
 mod utils;
 mod utils_hierarchical;
 
@@ -22,8 +23,8 @@ fn main() {
         .build_global()
         .unwrap();
 
-    let config = quarkstrom::Config {
-        window_mode: quarkstrom::WindowMode::Windowed(900, 900),
+    let config = moleculequest::Config {
+        window_mode: moleculequest::WindowMode::Windowed(900, 900),
     };
 
     let mut simulation = Simulation::new();
@@ -57,7 +58,7 @@ fn main() {
 	    }
     });
 
-    quarkstrom::run::<Renderer>(config);
+    moleculequest::run::<Renderer>(config);
 }
 
 fn render(simulation: &mut Simulation) {
