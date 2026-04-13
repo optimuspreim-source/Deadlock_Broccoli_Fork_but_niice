@@ -1,5 +1,6 @@
 use crate::{
     body::Body,
+    constellation::Constellation,
     quadtree::{Quad, Quadtree},
     utils,
 };
@@ -10,7 +11,13 @@ use ultraviolet::Vec2;
 pub struct Simulation {
     pub dt: f32,
     pub frame: usize,
+    /// Mass-centers used for galaxy-scale gravitational calculations.
+    /// These are never rendered directly; they coordinate the motion of
+    /// the constellations at the galaxy scale.
     pub bodies: Vec<Body>,
+    /// One constellation per mass-center (same index).  Each constellation
+    /// holds the 2–6 sub-particles that are actually rendered.
+    pub constellations: Vec<Constellation>,
     pub quadtree: Quadtree,
 }
 
@@ -21,13 +28,14 @@ impl Simulation {
         let theta = 1.0;
         let epsilon = 1.0;
 
-        let bodies: Vec<Body> = utils::uniform_disc(n);
+        let (bodies, constellations) = utils::uniform_disc(n);
         let quadtree = Quadtree::new(theta, epsilon);
 
         Self {
             dt,
             frame: 0,
             bodies,
+            constellations,
             quadtree,
         }
     }
@@ -36,6 +44,7 @@ impl Simulation {
         self.iterate();
         self.collide();
         self.attract();
+        self.advance_constellations();
         self.frame += 1;
     }
 
@@ -82,6 +91,13 @@ impl Simulation {
 
             self.resolve(i, j);
         });
+    }
+
+    /// Advance the Lissajous phases of all sub-particles.
+    fn advance_constellations(&mut self) {
+        for constellation in &mut self.constellations {
+            constellation.advance(self.dt);
+        }
     }
 
     fn resolve(&mut self, i: usize, j: usize) {
