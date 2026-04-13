@@ -95,6 +95,11 @@ pub fn create_globular_template(
     }
 
     let mut bodies: Vec<Body> = stars.into_iter().map(|(_, b)| b).collect();
+    let (dt_mass_scale, dt_speed_scale) = template_step_stability_scales();
+    for body in &mut bodies {
+        body.mass *= dt_mass_scale;
+        body.vel *= dt_speed_scale;
+    }
 
     // Remove center-of-mass drift so the cluster stays coherent after spawn.
     let mut total_mass = 0.0_f32;
@@ -285,6 +290,20 @@ const EPICYCLE_FREQUENCY_FACTOR: f32 = 2.0;
 
 const fn scaled_count(count: usize) -> usize {
     count * TEMPLATE_POPULATION_SCALE
+}
+
+fn template_step_stability_scales() -> (f32, f32) {
+    let dt_factor = f32::from_bits(crate::renderer::DT_FACTOR_BITS.load(Ordering::Relaxed))
+        .abs()
+        .max(1.0);
+    if dt_factor <= 1.0 {
+        return (1.0, 1.0);
+    }
+
+    let relief = dt_factor.powf(0.25);
+    let speed_scale = 1.0 / relief;
+    let mass_scale = 1.0 / (relief * relief);
+    (mass_scale, speed_scale)
 }
 
 struct NormalizationTargets {
@@ -850,19 +869,22 @@ fn add_disc(
     let target_disc_mass = spec.disc_mass * spec.disc_population.disc_mass_multiplier;
     let disc_start = bodies.len();
     let mut built_disc_mass = 0.0f32;
+    let arm_wave_amp = if spec.arm_count > 0 {
+        (spec.arm_contrast * spec.arm_coherence * spec.disc_population.arm_contrast_gain * 0.14)
+            .clamp(0.0, 0.24)
+    } else {
+        0.0
+    };
 
     for _ in 0..spec.disc_bodies {
         let base_angle = rng.f32() * std::f32::consts::TAU;
-        let mut angle = base_angle;
         let radial_u = rng.f32();
         let outer_bias = spec.disc_population.outer_count_bias.max(0.2);
         let legacy_bias = (1.0 / spec.disc_bias.max(0.25)).clamp(0.35, 2.4);
         let radial_frac = (1.0 - (1.0 - radial_u).powf(outer_bias)).powf(legacy_bias);
         let radius = (visible_radius * radial_frac).max(1.0);
         let radial_norm = (radius / visible_radius.max(1.0)).clamp(0.0, 1.0);
-        let arm_index = if spec.arm_count > 0 { rng.u32(0..spec.arm_count as u32) as f32 } else { 0.0 };
         let in_bar = spec.bar_fraction > 0.0 && radius < bar_length && rng.f32() < spec.bar_fraction;
-        let mut arm_membership = 0.0f32;
 
         let offset = if in_bar {
             let x = signed(rng) * bar_length;
@@ -870,53 +892,50 @@ fn add_disc(
             let z = noisy(rng) * disc_height * 0.6;
             Vec3::new(x, y, z)
         } else {
-            if spec.arm_count > 0 {
-                let ridge_angle = arm_index * std::f32::consts::TAU / spec.arm_count as f32
-                    + (radius / visible_radius) * spec.arm_twist;
-                let delta = shortest_angle_delta(base_angle, ridge_angle);
-                let width = spec.arm_width.max(0.05);
-                let gaussian = (-(delta / width).powi(2)).exp();
-                let contrast_gain = spec.disc_population.arm_contrast_gain.max(0.2);
-                arm_membership = (
-                    spec.arm_contrast
-                        * contrast_gain
-                        * gaussian.powf((0.68 + 0.5 * spec.arm_coherence) / contrast_gain.sqrt())
-                )
-                .clamp(0.0, 1.0);
-                let arm_lock = spec.disc_population.arm_lock_gain.max(0.2);
-                let arm_noise = noisy(rng)
-                    * width
-                    * (1.0 - arm_membership * (0.55 + 0.30 * arm_lock).min(0.94))
-                    * spec.disc_population.arm_noise_scale.max(0.15);
-                angle = base_angle
-                    + delta * arm_membership * (0.72 + 0.18 * spec.arm_coherence) * arm_lock
-                    + arm_noise;
-            }
             let irregular = visible_radius * spec.irregularity;
-            let arm_radial_bias = 1.0 - 0.035 * arm_membership;
-            let biased_radius = radius * arm_radial_bias;
-            let arm_lock = spec.disc_population.arm_lock_gain.max(0.2);
-            let arm_mix = (arm_membership * arm_lock).clamp(0.0, 0.98);
-            let x = angle.cos() * biased_radius + noisy(rng) * irregular * (1.0 - 0.55 * arm_mix);
-            let y = angle.sin() * biased_radius + noisy(rng) * irregular * (1.0 - 0.55 * arm_mix);
-            let warp = spec.warp * radius * (angle * 1.5).sin();
-            let z = noisy(rng)
-                * disc_height
-                * (0.25 + 0.75 * radius / visible_radius)
-                * (1.0 - 0.42 * arm_mix)
-                + warp;
+            let x = base_angle.cos() * radius + noisy(rng) * irregular;
+            let y = base_angle.sin() * radius + noisy(rng) * irregular;
+            let warp = spec.warp * radius * (base_angle * 1.5).sin();
+            let z = noisy(rng) * disc_height * (0.25 + 0.75 * radius / visible_radius) + warp;
             Vec3::new(x, y, z)
         };
 
         let planar_radius = Vec3::new(offset.x, offset.y, 0.0).mag().max(1.0);
         let tangent = tangent_xy(offset, spec.spin);
         let speed = orbital_speed_for_spec(spec, planar_radius, g_scale);
-        let radial_dir = offset / offset.mag().max(1.0);
-        let stream = arm_membership * spec.arm_coherence;
-        let radial_stream = radial_dir * (speed * 0.035 * stream * spec.spin.signum());
-        let tangential_speed = speed * (1.0 - 0.05 * stream);
+        let planar_rad = Vec3::new(offset.x / planar_radius, offset.y / planar_radius, 0.0);
+        let (wave_dv_r, wave_dv_t, arm_membership) = if arm_wave_amp > 1e-4 && !in_bar {
+            let phase_r = spec.arm_twist * radial_norm;
+            let mut psi = std::f32::consts::PI;
+            for arm_idx in 0..spec.arm_count {
+                let ridge = (arm_idx as f32 * std::f32::consts::TAU / spec.arm_count as f32 + phase_r)
+                    .rem_euclid(std::f32::consts::TAU);
+                let delta = shortest_angle_delta(base_angle, ridge);
+                if delta.abs() < psi.abs() {
+                    psi = delta;
+                }
+            }
+
+            let t_in = ((radial_norm - 0.15) / 0.12).clamp(0.0, 1.0);
+            let t_out = ((0.88 - radial_norm) / 0.10).clamp(0.0, 1.0);
+            let taper_mix = t_in * t_out;
+            let taper = taper_mix * taper_mix * (3.0 - 2.0 * taper_mix);
+            let amp = arm_wave_amp * taper * speed;
+            let crest_proximity = ((psi.cos() + 1.0) * 0.5).powi(2);
+            let membership = (
+                crest_proximity * spec.arm_contrast * spec.disc_population.arm_contrast_gain
+            )
+            .clamp(0.0, 1.0);
+            (
+                amp * psi.sin(),
+                -amp * std::f32::consts::SQRT_2 * psi.cos(),
+                membership,
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
         let velocity_noise = Vec3::new(noisy(rng), noisy(rng), noisy(rng) * 0.7)
-            * tangential_speed
+            * speed
             * (0.028 + spec.irregularity * 0.08)
             * disc_dispersion(spec, arm_membership);
         let mass_t = radial_norm.powf(spec.disc_population.mass_falloff_exp.max(0.1));
@@ -928,7 +947,7 @@ fn add_disc(
         let body_mass = mass_per_body * body_mass_factor.max(0.05);
         let mut body = Body::new_with_system(
             center + offset,
-            tangent * tangential_speed + radial_stream + velocity_noise,
+            tangent * (speed + wave_dv_t) + planar_rad * wave_dv_r + velocity_noise,
             body_mass,
             STAR_RADIUS * body_radius_factor.max(0.25),
             system_id,
@@ -1082,6 +1101,12 @@ fn normalize_template_system(bodies: &mut [Body], center: Vec3, spec: &GalaxySpe
         body.vel *= velocity_scale;
     }
 
+    let (dt_mass_scale, dt_speed_scale) = template_step_stability_scales();
+    for body in bodies.iter_mut() {
+        body.mass *= dt_mass_scale;
+        body.vel *= dt_speed_scale;
+    }
+
     stabilize_center_region(bodies, center, spec);
 }
 
@@ -1173,8 +1198,10 @@ fn apply_flat_rotation_with_epicycles(
         return;
     }
 
+    let (_, dt_speed_scale) = template_step_stability_scales();
+
     // 220 in galactic units mapped into stable world-space speeds.
-    let v_flat = (FLAT_ROTATION_SPEED_UNITS * FLAT_ROTATION_SPEED_SCALE).max(1e-4);
+    let v_flat = (FLAT_ROTATION_SPEED_UNITS * FLAT_ROTATION_SPEED_SCALE * dt_speed_scale).max(1e-4);
     let spin_sign = if spin >= 0.0 { 1.0 } else { -1.0 };
     let exclusion_sq = exclusion_radius * exclusion_radius;
     let mut max_disc_r = exclusion_radius.max(1e-4);
