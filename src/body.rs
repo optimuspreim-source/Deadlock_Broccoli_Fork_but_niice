@@ -12,6 +12,8 @@ pub struct Body {
     pub age: u8,
     pub ghost_mass: f32,
     pub merge_count: u8,
+    pub template_tag: u8,
+    pub accretion_spawn_budget: f32,
 }
 
 impl Body {
@@ -27,6 +29,8 @@ impl Body {
             age: 255,
             ghost_mass: 0.0,
             merge_count: 0,
+            template_tag: 0,
+            accretion_spawn_budget: 0.0,
         }
     }
 
@@ -42,6 +46,8 @@ impl Body {
             age: 0,
             ghost_mass: 0.0,
             merge_count: 0,
+            template_tag: 0,
+            accretion_spawn_budget: 0.0,
         }
     }
 
