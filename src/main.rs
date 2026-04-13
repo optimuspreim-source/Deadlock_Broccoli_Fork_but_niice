@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 mod body;
+mod galaxy_templates;
 mod quadtree;
 mod renderer;
 mod simulation;
